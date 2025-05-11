@@ -3,7 +3,7 @@ import logging
 import os
 from PIL import Image
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -112,10 +112,10 @@ def main():
         logger.error("No BOT_TOKEN set! Please set the environment variable.")
         return
 
-    updater = Updater(BOT_TOKEN, use_context=True)
+    application = Application.builder().token(BOT_TOKEN).build()
     
     # Dispatcher to register handlers
-    dp = updater.dispatcher
+    dp = application.dispatcher
 
     # Command handlers
     dp.add_handler(CommandHandler("start", start))
@@ -123,16 +123,13 @@ def main():
     dp.add_handler(CommandHandler("decode", decode))
 
     # Message handlers
-    dp.add_handler(MessageHandler(Filters.photo & ~Filters.command, get_encode_image))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, get_hidden_text))
-    dp.add_handler(MessageHandler(Filters.photo & ~Filters.command, get_decode_image))
+    dp.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_encode_image))
+    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_hidden_text))
+    dp.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_decode_image))
 
     # Start the bot
-    updater.start_polling()
-
-    # Run the bot until Ctrl+C is pressed
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
-  
+      
