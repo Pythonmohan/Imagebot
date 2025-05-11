@@ -1,7 +1,6 @@
 import os
-from PIL import Image
-from io import BytesIO
-from dotenv import load_dotenv
+import threading
+from flask import Flask
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -10,132 +9,109 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import logging
 import base64
+from io import BytesIO
 
-# Load .env if running locally
-load_dotenv()
+# Bot token from env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-# In-memory "database"
 user_states = {}
 pending_images = {}
 encoded_data = {}
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Flask dummy app
+web_app = Flask(__name__)
 
+@web_app.route('/')
+def home():
+    return "🤖 Bot is running!"
 
+# Telegram Bot Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to StegoBot!\n\n"
-        "Use /encode to hide a message in an image.\n"
-        "Use /decode to extract a hidden message."
+        "👋 Welcome to StegoBot!\nUse /encode to hide a message\nUse /decode to extract it."
     )
-
 
 async def encode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_states[user_id] = "awaiting_image"
-    await update.message.reply_text("📷 Please send the image you want to encode your message into.")
-
+    await update.message.reply_text("📷 Send the image to encode your message into.")
 
 async def get_encode_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-
     if user_states.get(user_id) != "awaiting_image":
         return
 
     if not update.message.photo:
-        await update.message.reply_text("❗ Please send a valid image.")
+        await update.message.reply_text("❗ Send a valid image.")
         return
 
-    # Get image file
     photo = update.message.photo[-1]
     photo_file = await photo.get_file()
     image_data = await photo_file.download_as_bytearray()
-
     pending_images[user_id] = image_data
     user_states[user_id] = "awaiting_text"
-    await update.message.reply_text("✍️ Now send the hidden text message you want to encode.")
-
+    await update.message.reply_text("✍️ Now send the hidden text message.")
 
 async def get_hidden_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-
     if user_states.get(user_id) != "awaiting_text":
         return
 
     message = update.message.text
     image_data = pending_images.get(user_id)
-
     if not image_data:
-        await update.message.reply_text("⚠️ Image not found. Please start again with /encode.")
+        await update.message.reply_text("⚠️ No image found. Start with /encode.")
         return
 
-    # Hide message using LSB (or simple base64 for now)
-    encoded = base64.b64encode(message.encode("utf-8")).decode("utf-8")
+    encoded = base64.b64encode(message.encode()).decode()
     encoded_data[user_id] = encoded
-
-    # Just simulate — in real case, you'd embed the message into the image
-    await update.message.reply_text("✅ Your message has been stored with the image.\nNow use /decode and send the same image.")
-
-    # Reset
+    await update.message.reply_text("✅ Message saved! Use /decode to extract it later.")
     user_states.pop(user_id, None)
-
 
 async def decode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_states[user_id] = "awaiting_decode_image"
-    await update.message.reply_text("📥 Please send the image you want to decode.")
-
+    await update.message.reply_text("📥 Send the image to decode the hidden message.")
 
 async def get_decode_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-
     if user_states.get(user_id) != "awaiting_decode_image":
         return
 
     if not update.message.photo:
-        await update.message.reply_text("❗ Please send a valid image.")
+        await update.message.reply_text("❗ Send a valid image.")
         return
 
-    # Simulate decode
     hidden = encoded_data.get(user_id)
     if hidden:
         try:
-            decoded = base64.b64decode(hidden.encode("utf-8")).decode("utf-8")
+            decoded = base64.b64decode(hidden.encode()).decode()
             await update.message.reply_text(f"🕵️ Hidden message:\n\n{decoded}")
         except:
             await update.message.reply_text("⚠️ Failed to decode message.")
     else:
         await update.message.reply_text("🚫 No hidden message found.")
-
     user_states.pop(user_id, None)
 
+def run_bot():
+    from telegram.ext import Application
 
-def main():
-    """Start the bot."""
-    if BOT_TOKEN is None:
-        logger.error("No BOT_TOKEN set! Please set the environment variable.")
-        return
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("encode", encode))
+    app.add_handler(CommandHandler("decode", decode))
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_encode_image))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_hidden_text))
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_decode_image))
 
-    # Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("encode", encode))
-    application.add_handler(CommandHandler("decode", decode))
-    application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_encode_image))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_hidden_text))
-    application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_decode_image))
+    app.run_polling()
 
-    application.run_polling()
+if __name__ == '__main__':
+    # Run the Telegram bot in a separate thread
+    threading.Thread(target=run_bot).start()
 
-
-if __name__ == "__main__":
-    main()
-  
+    # Start Flask app to keep Render happy
+    port = int(os.environ.get("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
+    
